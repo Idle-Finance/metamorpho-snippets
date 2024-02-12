@@ -2,16 +2,14 @@
 pragma solidity ^0.8.0;
 
 import {IMetaMorpho} from "@metamorpho/interfaces/IMetaMorpho.sol";
-import {ConstantsLib} from "@metamorpho/libraries/ConstantsLib.sol";
 
 import {MarketParamsLib} from "../../lib/metamorpho/lib/morpho-blue/src/libraries/MarketParamsLib.sol";
-import {Id, IMorpho, Market, MarketParams} from "../../lib/metamorpho/lib/morpho-blue/src/interfaces/IMorpho.sol";
+import {Id, IMorpho, Market, MarketParams, Position} from "../../lib/metamorpho/lib/morpho-blue/src/interfaces/IMorpho.sol";
 import {IIrm} from "../../lib/metamorpho/lib/morpho-blue/src/interfaces/IIrm.sol";
 import {MorphoBalancesLib} from "../../lib/metamorpho/lib/morpho-blue/src/libraries/periphery/MorphoBalancesLib.sol";
 import {MathLib, WAD} from "../../lib/metamorpho/lib/morpho-blue/src/libraries/MathLib.sol";
 
 import {Math} from "@openzeppelin/utils/math/Math.sol";
-import {ERC20} from "@openzeppelin/token/ERC20/ERC20.sol";
 
 contract MetaMorphoSnippets {
     using MathLib for uint256;
@@ -27,159 +25,194 @@ contract MetaMorphoSnippets {
 
     // --- VIEW FUNCTIONS ---
 
-    /// @notice Returns the total assets deposited into a MetaMorpho `vault`.
-    /// @param vault The address of the MetaMorpho vault.
-    function totalDepositVault(address vault) public view returns (uint256 totalAssets) {
-        totalAssets = IMetaMorpho(vault).totalAssets();
-    }
-
-    /// @notice Returns the total assets supplied into a specific morpho blue market by a MetaMorpho `vault`.
-    /// @param vault The address of the MetaMorpho vault.
-    /// @param marketParams The morpho blue market.
-    function vaultAssetsInMarket(address vault, MarketParams memory marketParams)
-        public
-        view
-        returns (uint256 assets)
-    {
-        assets = morpho.expectedSupplyAssets(marketParams, vault);
-    }
-
-    /// @notice Returns the total shares balance of a `user` on a MetaMorpho `vault`.
-    /// @param vault The address of the MetaMorpho vault.
-    /// @param user The address of the user.
-    function totalSharesUserVault(address vault, address user) public view returns (uint256 totalSharesUser) {
-        totalSharesUser = IMetaMorpho(vault).balanceOf(user);
-    }
-
-    /// @notice Returns the supply queue a MetaMorpho `vault`.
-    /// @param vault The address of the MetaMorpho vault.
-    function supplyQueueVault(address vault) public view returns (Id[] memory supplyQueueList) {
-        uint256 queueLength = IMetaMorpho(vault).supplyQueueLength();
-        supplyQueueList = new Id[](queueLength);
-
-        for (uint256 i; i < queueLength; ++i) {
-            supplyQueueList[i] = IMetaMorpho(vault).supplyQueue(i);
-        }
-
-        return supplyQueueList;
-    }
-
-    /// @notice Returns the withdraw queue a MetaMorpho `vault`.
-    /// @param vault The address of the MetaMorpho vault.
-    function withdrawQueueVault(address vault) public view returns (Id[] memory withdrawQueueList) {
-        uint256 queueLength = IMetaMorpho(vault).supplyQueueLength();
-        withdrawQueueList = new Id[](queueLength);
-
-        for (uint256 i; i < queueLength; ++i) {
-            withdrawQueueList[i] = IMetaMorpho(vault).withdrawQueue(i);
-        }
-
-        return withdrawQueueList;
-    }
-
-    /// @notice Returns the sum of the supply caps of markets with the same collateral `token` on a MetaMorpho `vault`.
-    /// @dev This is a way to visualize exposure to this token.
-    /// @param vault The address of the MetaMorpho vault.
-    /// @param asset The collateral asset.
-    function totalCapCollateral(address vault, address asset) public view returns (uint192 totalCap) {
-        uint256 queueLength = IMetaMorpho(vault).withdrawQueueLength();
-
-        for (uint256 i; i < queueLength; ++i) {
-            Id idMarket = IMetaMorpho(vault).withdrawQueue(i);
-            MarketParams memory marketParams = morpho.idToMarketParams(idMarket);
-
-            if (marketParams.collateralToken == asset) {
-                totalCap += IMetaMorpho(vault).config(idMarket).cap;
-            }
-        }
-    }
-
-    /// @notice Returns the current APY of the vault on a Morpho Blue market.
+    /// @notice Returns the current APR of the vault on a Morpho Blue market.
     /// @param marketParams The morpho blue market parameters.
     /// @param market The morpho blue market state.
-    function supplyAPYMarket(MarketParams memory marketParams, Market memory market)
+    function supplyAPRMarket(MarketParams memory marketParams, Market memory market)
+        public
+        view
+        returns (uint256 supplyRate)
+    {
+        supplyRate = supplyAPRMarket(marketParams, market, 0, 0);
+    }
+
+    /// @notice Returns the current APR of the vault on a Morpho Blue market.
+    /// @param marketParams The morpho blue market parameters.
+    /// @param market The morpho blue market state.
+    /// @param add The amount to add to the market balance.
+    /// @param sub The amount to subtract from the market balance.
+    function supplyAPRMarket(MarketParams memory marketParams, Market memory market, uint256 add, uint256 sub)
         public
         view
         returns (uint256 supplyRate)
     {
         // Get the borrow rate
         uint256 borrowRate;
-        if (marketParams.irm == address(0)) {
+        if (marketParams.irm == address(0) || (sub > 0 && (uint256(market.totalSupplyAssets) + add) <= sub)) {
             return 0;
         } else {
-            borrowRate = IIrm(marketParams.irm).borrowRateView(marketParams, market).wTaylorCompounded(1);
+            // simulate change in market total assets
+            market.totalSupplyAssets = uint128(uint256(market.totalSupplyAssets) + add - sub);
+            borrowRate = IIrm(marketParams.irm).borrowRateView(marketParams, market);
         }
 
         (uint256 totalSupplyAssets,, uint256 totalBorrowAssets,) = morpho.expectedMarketBalances(marketParams);
-
-        // Get the supply rate
-        uint256 utilization = totalBorrowAssets == 0 ? 0 : totalBorrowAssets.wDivUp(totalSupplyAssets);
-
-        supplyRate = borrowRate.wTaylorCompounded(1).wMulDown(1 ether - market.fee).wMulDown(utilization);
+        if (sub > 0 && (totalSupplyAssets + add) <= sub) {
+            return 0;
+        }
+        // Get the supply rate using add/sub simulations
+        uint256 utilization = totalBorrowAssets == 0 ? 0 : totalBorrowAssets.wDivUp(totalSupplyAssets + add - sub);
+        supplyRate = borrowRate.wMulDown(1 ether - market.fee).wMulDown(utilization);
     }
 
     /// @notice Returns the current APY of a MetaMorpho vault.
     /// @dev It is computed as the sum of all APY of enabled markets weighted by the supply on these markets.
     /// @param vault The address of the MetaMorpho vault.
-    function supplyAPYVault(address vault) public view returns (uint256 avgSupplyRate) {
+    function supplyAPRVault(address vault) public view returns (uint256 avgSupplyRate) {
+        avgSupplyRate = supplyAPRVault(vault, 0, 0);
+    }
+
+    /// @notice Returns the current APY of a MetaMorpho vault.
+    /// @dev It is computed as the sum of all APY of enabled markets weighted by the supply on these markets.
+    /// @param vault The address of the MetaMorpho vault.
+    /// @param add The amount to add to the vault balance.
+    /// @param sub The amount to subtract from the vault balance.
+    function supplyAPRVault(address vault, uint256 add, uint256 sub) public view returns (uint256 avgSupplyRate) {
         uint256 ratio;
+        uint256 expectedSupply;
         uint256 queueLength = IMetaMorpho(vault).withdrawQueueLength();
+        uint256 supplyQueueLength = IMetaMorpho(vault).supplyQueueLength();
+        // simulate change in vault total assets
+        uint256 newTotalAmount = IMetaMorpho(vault).totalAssets();
+        if (sub > 0 && (newTotalAmount + add) <= sub) {
+            return 0;
+        }
 
-        uint256 totalAmount = totalDepositVault(vault);
-
+        newTotalAmount = newTotalAmount + add - sub;
         for (uint256 i; i < queueLength; ++i) {
             Id idMarket = IMetaMorpho(vault).withdrawQueue(i);
-
             MarketParams memory marketParams = morpho.idToMarketParams(idMarket);
-            Market memory market = morpho.market(idMarket);
+            uint256 toAdd;
+            if (add > 0) {
+                toAdd = _calcMarketAdd(IMetaMorpho(vault), idMarket, supplyQueueLength, add);
+            }
+            // TODO add Jean-Grimal impl which should be ok here https://github.com/Idle-Labs/idle-tranches/pull/87/files
+            // as we loop through all withdrawQueue
+            uint256 toSub;
+            if (sub > 0) {
+                toSub = _calcMarketSub(IMetaMorpho(vault), idMarket, queueLength, sub);
+            }
 
-            uint256 currentSupplyAPY = supplyAPYMarket(marketParams, market);
-            uint256 vaultAsset = vaultAssetsInMarket(vault, marketParams);
-            ratio += currentSupplyAPY.wMulDown(vaultAsset);
+            expectedSupply = morpho.expectedSupplyAssets(marketParams, vault);
+            if (toSub > 0 && (expectedSupply + toAdd) < toSub) {
+                continue;
+            }
+            // Use scaled add and sub values to calculate current supply APR Market
+            ratio += supplyAPRMarket(marketParams, morpho.market(idMarket), toAdd, toSub).wMulDown(
+                // Use scaled add and sub values to calculate assets supplied
+                expectedSupply + toAdd - toSub
+            );
         }
 
-        avgSupplyRate = ratio.wDivUp(totalAmount);
+        avgSupplyRate = ratio.mulDivDown(WAD - IMetaMorpho(vault).fee(), newTotalAmount);
     }
 
-    // // --- MANAGING FUNCTIONS ---
+    /// @notice calculate how much of vault `_add` amount will be added to this market
+    /// @param _mmVault metamorpho vault
+    /// @param _targetMarketId target market id
+    /// @param _supplyQueueLen supply queue length
+    /// @param _add amount of liquidity to add
+    function _calcMarketAdd(
+        IMetaMorpho _mmVault,
+        Id _targetMarketId,
+        uint256 _supplyQueueLen,
+        uint256 _add
+    ) internal view returns (uint256) {
+        uint256 _assetsSuppliedByVault;
+        uint184 _marketCap;
+        Id _currMarketId;
+        Market memory _market;
+        Position memory _pos;
 
-    /// @notice Deposit `assets` into the `vault` on behalf of `onBehalf`.
-    /// @dev Sender must approve the snippets contract to manage his tokens before the call.
-    /// @param vault The address of the MetaMorpho vault.
-    /// @param assets the amount to deposit.
-    /// @param onBehalf The address that will own the increased deposit position.
-    function depositInVault(address vault, uint256 assets, address onBehalf) public returns (uint256 shares) {
-        ERC20(IMetaMorpho(vault).asset()).transferFrom(msg.sender, address(this), assets);
-
-        _approveMaxVault(vault);
-
-        shares = IMetaMorpho(vault).deposit(assets, onBehalf);
-    }
-
-    /// @notice Withdraws `assets` from the `vault` on behalf of the sender, and sends them to `receiver`.
-    /// @dev Sender must approve the snippets contract to manage his tokens before the call.
-    /// @dev To withdraw all, it is recommended to use the redeem function.
-    /// @param vault The address of the MetaMorpho vault.
-    /// @param assets the amount to withdraw.
-    /// @param receiver The address that will receive the withdrawn assets.
-    function withdrawFromVaultAmount(address vault, uint256 assets, address receiver)
-        public
-        returns (uint256 redeemed)
-    {
-        redeemed = IMetaMorpho(vault).withdraw(assets, receiver, msg.sender);
-    }
-
-    /// @notice Redeems the whole sender's position from the `vault`, and sends the withdrawn amount to `receiver`.
-    /// @param vault The address of the MetaMorpho vault.
-    /// @param receiver The address that will receive the withdrawn assets.
-    function redeemAllFromVault(address vault, address receiver) public returns (uint256 redeemed) {
-        uint256 maxToRedeem = IMetaMorpho(vault).maxRedeem(msg.sender);
-        redeemed = IMetaMorpho(vault).redeem(maxToRedeem, receiver, msg.sender);
-    }
-
-    function _approveMaxVault(address vault) internal {
-        if (ERC20(IMetaMorpho(vault).asset()).allowance(address(this), vault) == 0) {
-            ERC20(IMetaMorpho(vault).asset()).approve(vault, type(uint256).max);
+        // loop throuh supplyQueue, starting from the first market, and see how much will
+        // be deposited in target market
+        for (uint256 i = 0; i < _supplyQueueLen; i++) {
+            _currMarketId = _mmVault.supplyQueue(i);
+            _market = morpho.market(_currMarketId);
+            _pos = morpho.position(_currMarketId, address(_mmVault));
+            _assetsSuppliedByVault = _pos.supplyShares * _market.totalSupplyAssets / _market.totalSupplyShares;
+            // get max depositable amount for this market
+            _marketCap = _mmVault.config(_currMarketId).cap;
+            uint256 _maxDeposit;
+            if (_assetsSuppliedByVault < uint256(_marketCap)) {
+                _maxDeposit = uint256(_marketCap) - _assetsSuppliedByVault;
+            }
+            // If this is the target market, return the current _add value, eventually
+            // reduced to the max depositable amount
+            if (Id.unwrap(_currMarketId) == Id.unwrap(_targetMarketId)) {
+                if (_add > _maxDeposit) {
+                    _add = _maxDeposit;
+                }
+                break;
+            }
+            // If this is not the target market, check if we can deposit all the _add amount
+            // in this market, otherwise continue the loop and subtract the max depositable
+            if (_add > _maxDeposit) {
+                _add -= _maxDeposit;
+            } else {
+                _add = 0;
+                break;
+            }
         }
+
+        return _add;
+    }
+
+    /// @notice calculate how much of vault `_sub` amount will be removed from target market
+    /// @param _mmVault metamorpho vault
+    /// @param _targetMarketId target market id
+    /// @param _withdrawQueueLen withdraw queue length
+    /// @param _sub liquidity to remove
+    function _calcMarketSub(
+        IMetaMorpho _mmVault, 
+        Id _targetMarketId,
+        uint256 _withdrawQueueLen,
+        uint256 _sub
+    ) internal view returns (uint256) {
+        Market memory _market;
+        Position memory _position;
+        Id _currMarketId;
+        // loop throuh withdrawQueue, and see how much will be redeemed in target market
+        for (uint256 i = 0; i < _withdrawQueueLen; i++) {
+            _currMarketId = _mmVault.withdrawQueue(i);
+            _market = morpho.market(_currMarketId);
+            _position = morpho.position(_currMarketId, address(_mmVault));
+            // get available liquidity for this market
+            if (_market.totalSupplyShares == 0) {
+                continue;
+            }
+            uint256 _vaultAssets = _position.supplyShares * _market.totalSupplyAssets / _market.totalSupplyShares;
+            uint256 _availableLiquidity = _market.totalSupplyAssets - _market.totalBorrowAssets;
+            uint256 _withdrawable = _vaultAssets > _availableLiquidity ? _availableLiquidity : _vaultAssets;
+
+            // If this is the target market, return the current _sub value, eventually
+            // reduced to the max withdrawable amount
+            if (Id.unwrap(_currMarketId) == Id.unwrap(_targetMarketId)) {
+                if (_sub > _withdrawable) {
+                    _sub = _withdrawable;
+                }
+                break;
+            }
+            // If this is not the target market, check if we can withdraw all the _sub amount
+            // in this market, otherwise continue the loop and subtract the available liquidity
+            if (_sub > _withdrawable) {
+                _sub -= _withdrawable;
+            } else {
+                _sub = 0;
+                break;
+            }
+        }
+
+        return _sub;
     }
 }

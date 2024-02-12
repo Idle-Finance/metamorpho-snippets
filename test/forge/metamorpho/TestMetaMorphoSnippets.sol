@@ -29,135 +29,29 @@ contract TestMetaMorphoSnippets is IntegrationTest {
         vm.stopPrank();
     }
 
-    function testTotalDepositVault(uint256 firstDeposit, uint256 secondDeposit) public {
-        firstDeposit = bound(firstDeposit, MIN_TEST_ASSETS, MAX_TEST_ASSETS / 2);
-        secondDeposit = bound(secondDeposit, MIN_TEST_ASSETS, MAX_TEST_ASSETS / 2);
-
-        loanToken.setBalance(SUPPLIER, firstDeposit);
-
-        vm.prank(SUPPLIER);
-        vault.deposit(firstDeposit, ONBEHALF);
-
-        assertEq(snippets.totalDepositVault(address(vault)), firstDeposit, "lastTotalAssets");
-
-        loanToken.setBalance(SUPPLIER, secondDeposit);
-        vm.prank(SUPPLIER);
-        vault.deposit(secondDeposit, ONBEHALF);
-
-        assertEq(snippets.totalDepositVault(address(vault)), firstDeposit + secondDeposit, "lastTotalAssets2");
-    }
-
-    function testVaultAssetsInMarket(uint256 assets) public {
-        assets = bound(assets, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-
-        loanToken.setBalance(SUPPLIER, assets);
-
-        vm.prank(SUPPLIER);
-        uint256 shares = vault.deposit(assets, ONBEHALF);
-
-        assertGt(shares, 0, "shares");
-        assertEq(vault.balanceOf(ONBEHALF), shares, "balanceOf(ONBEHALF)");
-        assertEq(morpho.expectedSupplyAssets(allMarkets[0], address(vault)), assets, "expectedSupplyAssets(vault)");
-        assertEq(snippets.vaultAssetsInMarket(address(vault), allMarkets[0]), assets, "expectedSupplyAssets(vault)");
-    }
-
-    function testTotalSharesUserVault(uint256 deposited) public {
-        deposited = bound(deposited, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-
-        loanToken.setBalance(SUPPLIER, deposited);
-        vm.prank(SUPPLIER);
-        uint256 shares = vault.deposit(deposited, ONBEHALF);
-
-        assertEq(vault.balanceOf(ONBEHALF), shares, "balanceOf(ONBEHALF)");
-        assertEq(snippets.totalSharesUserVault(address(vault), ONBEHALF), shares, "UserShares");
-    }
-
-    function testSupplyQueueVault() public {
-        _setCaps();
-        Id[] memory supplyQueue = new Id[](2);
-        supplyQueue[0] = allMarkets[1].id();
-        supplyQueue[1] = allMarkets[2].id();
-
-        vm.prank(ALLOCATOR);
-        vault.setSupplyQueue(supplyQueue);
-
-        assertEq(Id.unwrap(vault.supplyQueue(0)), Id.unwrap(allMarkets[1].id()));
-        assertEq(Id.unwrap(vault.supplyQueue(1)), Id.unwrap(allMarkets[2].id()));
-
-        Id[] memory supplyQueueList = snippets.supplyQueueVault(address(vault));
-        assertEq(Id.unwrap(supplyQueueList[0]), Id.unwrap(allMarkets[1].id()));
-        assertEq(Id.unwrap(supplyQueueList[1]), Id.unwrap(allMarkets[2].id()));
-    }
-
-    function testWithdrawQueueVault() public {
-        _setCaps();
-
-        uint256[] memory indexes = new uint256[](4);
-        indexes[0] = 1;
-        indexes[1] = 2;
-        indexes[2] = 3;
-        indexes[3] = 0;
-
-        Id[] memory expectedWithdrawQueue = new Id[](4);
-        expectedWithdrawQueue[0] = allMarkets[0].id();
-        expectedWithdrawQueue[1] = allMarkets[1].id();
-        expectedWithdrawQueue[2] = allMarkets[2].id();
-        expectedWithdrawQueue[3] = idleParams.id();
-
-        vm.expectEmit(address(vault));
-        emit EventsLib.SetWithdrawQueue(ALLOCATOR, expectedWithdrawQueue);
-        vm.prank(ALLOCATOR);
-        vault.updateWithdrawQueue(indexes);
-
-        assertEq(Id.unwrap(vault.withdrawQueue(0)), Id.unwrap(expectedWithdrawQueue[0]));
-        assertEq(Id.unwrap(vault.withdrawQueue(1)), Id.unwrap(expectedWithdrawQueue[1]));
-        assertEq(Id.unwrap(vault.withdrawQueue(2)), Id.unwrap(expectedWithdrawQueue[2]));
-        assertEq(Id.unwrap(vault.withdrawQueue(3)), Id.unwrap(expectedWithdrawQueue[3]));
-
-        Id[] memory withdrawQueueList = snippets.withdrawQueueVault(address(vault));
-
-        assertEq(Id.unwrap(withdrawQueueList[0]), Id.unwrap(expectedWithdrawQueue[0]));
-        assertEq(Id.unwrap(withdrawQueueList[1]), Id.unwrap(expectedWithdrawQueue[1]));
-    }
-
-    function testTotalCapAsset(uint256 capMarket1, uint256 capMarket2, uint256 capMarket3) public {
-        capMarket1 = bound(capMarket1, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-        capMarket2 = bound(capMarket2, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-        capMarket3 = bound(capMarket3, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-
-        _setCap(allMarkets[0], capMarket1);
-        _setCap(allMarkets[1], capMarket2);
-        _setCap(allMarkets[2], capMarket3);
-
-        assertEq(
-            capMarket1 + capMarket2 + capMarket3,
-            snippets.totalCapCollateral(address(vault), address(collateralToken)),
-            "total collateral cap"
-        );
-    }
-
-    function testSupplyAPY0(Market memory market) public {
-        vm.assume(market.totalBorrowAssets == 0);
+    function testSupplyAPR0(Market memory market) public {
         vm.assume(market.lastUpdate > 0);
         vm.assume(market.fee < 1 ether);
         vm.assume(market.totalSupplyAssets >= market.totalBorrowAssets);
+        // assume no borrowed assets
+        market.totalBorrowAssets = 0;
 
-        MarketParams memory marketParams = allMarkets[0];
-        (uint256 totalSupplyAssets,, uint256 totalBorrowAssets,) = morpho.expectedMarketBalances(marketParams);
+        MarketParams memory _marketParams = allMarkets[0];
+        (uint256 totalSupplyAssets,, uint256 totalBorrowAssets,) = morpho.expectedMarketBalances(_marketParams);
 
-        uint256 borrowTrue = irm.borrowRateView(marketParams, market);
+        uint256 borrowTrue = irm.borrowRateView(_marketParams, market);
         uint256 utilization = totalBorrowAssets == 0 ? 0 : totalBorrowAssets.wDivUp(totalSupplyAssets);
 
-        assertEq(utilization, 0, "Diff in snippets vs integration supplyAPY test");
+        assertEq(utilization, 0, "Diff in snippets vs integration supplyAPR test");
         assertEq(
             borrowTrue.wMulDown(1 ether - market.fee).wMulDown(utilization),
             0,
-            "Diff in snippets vs integration supplyAPY test"
+            "Diff in snippets vs integration supplyAPR test"
         );
-        assertEq(snippets.supplyAPYMarket(marketParams, market), 0, "Diff in snippets vs integration supplyAPY test");
+        assertEq(snippets.supplyAPRMarket(_marketParams, market), 0, "Diff in snippets vs integration supplyAPR test");
     }
 
-    function testSupplyAPYIdleMarket() public {
+    function testSupplyAPRIdleMarket() public {
         Market memory market;
         MarketParams memory idleMarket;
         idleMarket.loanToken = address(loanToken);
@@ -167,12 +61,12 @@ contract TestMetaMorphoSnippets is IntegrationTest {
 
         morpho.createMarket(idleMarket);
 
-        uint256 supplyAPY = snippets.supplyAPYMarket(idleMarket, market);
+        uint256 supplyAPR = snippets.supplyAPRMarket(idleMarket, market);
 
-        assertEq(supplyAPY, 0, "supply APY");
+        assertEq(supplyAPR, 0, "supply APR");
     }
 
-    function testSupplyAPYMarket(Market memory market) public {
+    function testSupplyAPRMarket(Market memory market, uint64 add, uint64 sub) public {
         vm.assume(market.totalBorrowAssets > 0);
         vm.assume(market.totalBorrowShares > 0);
         vm.assume(market.totalSupplyAssets > 0);
@@ -180,33 +74,81 @@ contract TestMetaMorphoSnippets is IntegrationTest {
         vm.assume(market.fee < 1 ether);
         vm.assume(market.totalSupplyAssets >= market.totalBorrowAssets);
 
-        MarketParams memory marketParams = allMarkets[0];
-        (uint256 totalSupplyAssets,, uint256 totalBorrowAssets,) = morpho.expectedMarketBalances(marketParams);
+        MarketParams memory _marketParams = allMarkets[0];
+        (uint256 totalSupplyAssets,, uint256 totalBorrowAssets,) = morpho.expectedMarketBalances(_marketParams);
 
-        uint256 borrowTrue = irm.borrowRateView(marketParams, market);
+        uint256 borrowTrue = irm.borrowRateView(_marketParams, market);
         uint256 utilization = totalBorrowAssets == 0 ? 0 : totalBorrowAssets.wDivUp(totalSupplyAssets);
-        uint256 supplyTrue = borrowTrue.wTaylorCompounded(1).wMulDown(1 ether - market.fee).wMulDown(utilization);
+        uint256 supplyTrue = borrowTrue.wMulDown(1 ether - market.fee).wMulDown(utilization);
 
-        uint256 supplyToTest = snippets.supplyAPYMarket(marketParams, market);
+        uint256 supplyToTest = snippets.supplyAPRMarket(_marketParams, market);
 
         // handling in if-else the situation where utilization = 0 otherwise too many rejects
         if (utilization == 0) {
             assertEq(supplyTrue, 0, "supply rate == 0");
-            assertEq(supplyTrue, supplyToTest, "Diff in snippets vs integration supplyAPY test");
+            assertEq(supplyTrue, supplyToTest, "Diff in snippets vs integration supplyAPR test");
         } else {
             assertGt(supplyTrue, 0, "supply rate == 0");
-            assertEq(supplyTrue, supplyToTest, "Diff in snippets vs integration supplyAPY test");
+            assertEq(supplyTrue, supplyToTest, "Diff in snippets vs integration supplyAPR test");
         }
+
+        // Add/sub assertions
+        if (utilization == 0) {
+            return;
+        }
+
+        uint256 supplyToTestAddSub = snippets.supplyAPRMarket(_marketParams, market, 0, 0);
+        assertEq(supplyToTestAddSub, supplyToTest, "Diff in supplyAPRVault without add/sub values");
+
+        supplyToTestAddSub = snippets.supplyAPRMarket(_marketParams, market, add, sub);
+        // update market totalSupplyAssets
+        market.totalSupplyAssets = uint128(uint256(market.totalSupplyAssets) + add - sub);
+        borrowTrue = irm.borrowRateView(_marketParams, market);
+        utilization = totalBorrowAssets == 0 ? 0 : totalBorrowAssets.wDivUp(totalSupplyAssets + add - sub);
+        supplyTrue = borrowTrue.wMulDown(1 ether - market.fee).wMulDown(utilization);
+        assertEq(supplyToTestAddSub, supplyTrue, "Diff in supplyAPRVault with add/sub values");
     }
 
-    function testSupplyAPYVault(uint256 firstDeposit, uint256 secondDeposit, uint256 firstBorrow, uint256 secondBorrow)
-        public
+    function testSupplyAPRVault(uint256 firstDeposit, uint256 secondDeposit, uint256 firstBorrow, uint256 secondBorrow, uint256 add, uint256 sub) public
     {
         firstDeposit = bound(firstDeposit, MIN_TEST_ASSETS, MAX_TEST_ASSETS / 2);
         secondDeposit = bound(secondDeposit, MIN_TEST_ASSETS, MAX_TEST_ASSETS / 2);
         firstBorrow = bound(firstBorrow, MIN_TEST_ASSETS, firstDeposit);
         secondBorrow = bound(secondBorrow, MIN_TEST_ASSETS, secondDeposit);
+        add = bound(add, MIN_TEST_ASSETS, MAX_TEST_ASSETS / 2);
+        sub = bound(sub, MIN_TEST_ASSETS, MAX_TEST_ASSETS / 2);       
 
+        _setupVault(firstDeposit, secondDeposit, firstBorrow, secondBorrow);
+
+        Id id0 = Id(allMarkets[0].id());
+        Id id1 = Id(allMarkets[1].id());
+
+        // Calc vault apr using 0 add/sub
+        uint256 expectedAvgRate = _calcVaultAPR(id0, id1, firstDeposit, secondDeposit, 0, 0);
+        uint256 avgSupplyRateSnippets = snippets.supplyAPRVault(address(vault));
+
+        assertApproxEqAbs(avgSupplyRateSnippets, expectedAvgRate, 100, "avgSupplyRateSnippets == 0");
+
+        // Add/sub assertions
+        if (add >= sub) {
+            add = add - sub;
+            sub = 0;
+        } else {
+            sub = sub - add;
+            add = 0;
+        }
+
+        // Result should be the same if 0 add/sub
+        assertApproxEqAbs(snippets.supplyAPRVault(address(vault), 0, 0), avgSupplyRateSnippets, 100, "Diff in supplyAPRVault without add/sub values");
+
+        // Result should match the same if add/sub != 0
+        avgSupplyRateSnippets = snippets.supplyAPRVault(address(vault), add, sub);
+        expectedAvgRate = _calcVaultAPR(id0, id1, firstDeposit, secondDeposit, add, sub);
+
+        assertApproxEqAbs(avgSupplyRateSnippets, expectedAvgRate, 100, "Diff in supplyAPRVault with add/sub values");
+    }
+
+    function _setupVault(uint256 firstDeposit, uint256 secondDeposit, uint256 firstBorrow, uint256 secondBorrow) internal {
         _setCap(allMarkets[0], firstDeposit);
         _setCap(allMarkets[1], secondDeposit);
 
@@ -231,71 +173,132 @@ contract TestMetaMorphoSnippets is IntegrationTest {
         morpho.supplyCollateral(allMarkets[1], MAX_TEST_ASSETS, BORROWER, hex"");
         morpho.borrow(allMarkets[1], secondBorrow / 4, 0, BORROWER, BORROWER);
         vm.stopPrank();
-
-        Id id0 = Id(allMarkets[0].id());
-        Id id1 = Id(allMarkets[1].id());
-
-        Market memory market0 = morpho.market(id0);
-        Market memory market1 = morpho.market(id1);
-
-        uint256 rateMarket0 = snippets.supplyAPYMarket(allMarkets[0], market0);
-        uint256 rateMarket1 = snippets.supplyAPYMarket(allMarkets[1], market1);
-        uint256 avgRateNum = rateMarket0.wMulDown(firstDeposit) + rateMarket1.wMulDown(secondDeposit);
-
-        uint256 expectedAvgRate = avgRateNum.wDivUp(firstDeposit + secondDeposit);
-
-        uint256 avgSupplyRateSnippets = snippets.supplyAPYVault(address(vault));
-
-        assertEq(avgSupplyRateSnippets, expectedAvgRate, "avgSupplyRateSnippets == 0");
     }
 
-    // MANAGING FUNCTION
+    function _calcVaultAPR(Id id0, Id id1, uint256 firstDeposit, uint256 secondDeposit, uint256 add, uint256 sub) internal view returns(uint256) {
+        uint256 avgRateNum = 
+            _calcMarketAprTimesDeposit(allMarkets[0], id0, firstDeposit, add, sub) + 
+            _calcMarketAprTimesDeposit(allMarkets[1], id1, secondDeposit, add, sub);
 
-    function testDepositInVault(uint256 assets) public {
-        assets = bound(assets, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-
-        loanToken.setBalance(SUPPLIER, assets);
-        vm.prank(SUPPLIER);
-        uint256 shares = snippets.depositInVault(address(vault), assets, SUPPLIER);
-
-        assertGt(shares, 0, "shares");
-        assertEq(vault.balanceOf(SUPPLIER), shares, "balanceOf(SUPPLIER)");
+        if (sub > 0 && (firstDeposit + secondDeposit + add) <= sub) {
+           return 0; 
+        }
+        return avgRateNum.mulDivDown(WAD - vault.fee(), (firstDeposit + secondDeposit) + add - sub);
     }
 
-    function testWithdrawFromVaultAmount(uint256 deposited, uint256 withdrawn) public {
-        deposited = bound(deposited, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
-        withdrawn = bound(withdrawn, 0, deposited);
+    function _calcMarketAprTimesDeposit(MarketParams memory params, Id _id, uint256 deposit, uint256 add, uint256 sub) internal view returns(uint256) {
+        Market memory market = morpho.market(_id);
+        if (add > 0) {
+            add = _calcMarketAdd(IMetaMorpho(vault), _id, IMetaMorpho(vault).supplyQueueLength(), add);
+        }
+        if (sub > 0) {
+            sub = _calcMarketSub(IMetaMorpho(vault), _id, IMetaMorpho(vault).withdrawQueueLength(), sub);
+        }
 
-        loanToken.setBalance(SUPPLIER, deposited);
-        vm.startPrank(SUPPLIER);
-        uint256 shares = vault.deposit(deposited, SUPPLIER);
-        uint256 redeemed = snippets.withdrawFromVaultAmount(address(vault), withdrawn, SUPPLIER);
-        vm.stopPrank();
-
-        assertEq(vault.balanceOf(SUPPLIER), shares - redeemed, "balanceOf(SUPPLIER)");
+        if (sub > 0 && (deposit + add) < sub) {
+            return 0;
+        }
+        return snippets.supplyAPRMarket(params, market, add, sub).wMulDown(deposit + add - sub);
     }
 
-    function testRedeemAllFromVault(uint256 deposited) public {
-        deposited = bound(deposited, MIN_TEST_ASSETS, MAX_TEST_ASSETS);
+    /// @notice calculate how much of vault `_add` amount will be added to this market
+    /// @dev copied from MetaMorphoSnippets.sol
+    /// @param _mmVault metamorpho vault
+    /// @param _targetMarketId target market id
+    /// @param _supplyQueueLen supply queue length
+    /// @param _add amount of liquidity to add
+    function _calcMarketAdd(
+        IMetaMorpho _mmVault,
+        Id _targetMarketId,
+        uint256 _supplyQueueLen,
+        uint256 _add
+    ) internal view returns (uint256) {
+        uint256 _assetsSuppliedByVault;
+        uint184 _marketCap;
+        Id _currMarketId;
+        Market memory _market;
+        Position memory _pos;
 
-        loanToken.setBalance(SUPPLIER, deposited);
-        vm.startPrank(SUPPLIER);
-        uint256 minted = vault.deposit(deposited, SUPPLIER);
+        // loop throuh supplyQueue, starting from the first market, and see how much will
+        // be deposited in target market
+        for (uint256 i = 0; i < _supplyQueueLen; i++) {
+            _currMarketId = _mmVault.supplyQueue(i);
+            _market = morpho.market(_currMarketId);
+            _pos = morpho.position(_currMarketId, address(_mmVault));
+            _assetsSuppliedByVault = _pos.supplyShares * _market.totalSupplyAssets / _market.totalSupplyShares;
+            // get max depositable amount for this market
+            _marketCap = _mmVault.config(_currMarketId).cap;
+            uint256 _maxDeposit;
+            if (_assetsSuppliedByVault < uint256(_marketCap)) {
+                _maxDeposit = uint256(_marketCap) - _assetsSuppliedByVault;
+            }
+            // If this is the target market, return the current _add value, eventually
+            // reduced to the max depositable amount
+            if (Id.unwrap(_currMarketId) == Id.unwrap(_targetMarketId)) {
+                if (_add > _maxDeposit) {
+                    _add = _maxDeposit;
+                }
+                break;
+            }
+            // If this is not the target market, check if we can deposit all the _add amount
+            // in this market, otherwise continue the loop and subtract the max depositable
+            if (_add > _maxDeposit) {
+                _add -= _maxDeposit;
+            } else {
+                _add = 0;
+                break;
+            }
+        }
 
-        assertEq(vault.maxRedeem(SUPPLIER), minted, "maxRedeem(SUPPLIER)");
-
-        uint256 redeemed = snippets.redeemAllFromVault(address(vault), SUPPLIER);
-        vm.stopPrank();
-
-        assertEq(redeemed, deposited, "assets");
-        assertEq(vault.balanceOf(SUPPLIER), 0, "balanceOf(SUPPLIER)");
-        assertEq(loanToken.balanceOf(SUPPLIER), deposited, "loanToken.balanceOf(SUPPLIER)");
-        assertEq(morpho.expectedSupplyAssets(allMarkets[0], address(vault)), 0, "expectedSupplyAssets(vault)");
+        return _add;
     }
 
-    function _setCaps() internal {
-        _setCap(allMarkets[0], CAP);
-        _setCap(allMarkets[1], CAP);
-        _setCap(allMarkets[2], CAP);
+    /// @notice calculate how much of vault `_sub` amount will be removed from target market
+    /// @dev copied from MetaMorphoSnippets.sol
+    /// @param _mmVault metamorpho vault
+    /// @param _targetMarketId target market id
+    /// @param _withdrawQueueLen withdraw queue length
+    /// @param _sub liquidity to remove
+    function _calcMarketSub(
+        IMetaMorpho _mmVault, 
+        Id _targetMarketId,
+        uint256 _withdrawQueueLen,
+        uint256 _sub
+    ) internal view returns (uint256) {
+        Market memory _market;
+        Position memory _position;
+        Id _currMarketId;
+        // loop throuh withdrawQueue, and see how much will be redeemed in target market
+        for (uint256 i = 0; i < _withdrawQueueLen; i++) {
+            _currMarketId = _mmVault.withdrawQueue(i);
+            _market = morpho.market(_currMarketId);
+            _position = morpho.position(_currMarketId, address(_mmVault));
+            // get available liquidity for this market
+            if (_market.totalSupplyShares == 0) {
+                continue;
+            }
+            uint256 _vaultAssets = _position.supplyShares * _market.totalSupplyAssets / _market.totalSupplyShares;
+            uint256 _availableLiquidity = _market.totalSupplyAssets - _market.totalBorrowAssets;
+            uint256 _withdrawable = _vaultAssets > _availableLiquidity ? _availableLiquidity : _vaultAssets;
+
+            // If this is the target market, return the current _sub value, eventually
+            // reduced to the max withdrawable amount
+            if (Id.unwrap(_currMarketId) == Id.unwrap(_targetMarketId)) {
+                if (_sub > _withdrawable) {
+                    _sub = _withdrawable;
+                }
+                break;
+            }
+            // If this is not the target market, check if we can withdraw all the _sub amount
+            // in this market, otherwise continue the loop and subtract the available liquidity
+            if (_sub > _withdrawable) {
+                _sub -= _withdrawable;
+            } else {
+                _sub = 0;
+                break;
+            }
+        }
+
+        return _sub;
     }
 }
