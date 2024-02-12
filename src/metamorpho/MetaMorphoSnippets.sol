@@ -114,6 +114,12 @@ contract MetaMorphoSnippets {
             );
         }
 
+        // If there is still some liquidity to remove here it means there is not enough liquidity
+        // in the vault to cover the requested withdraw amount
+        if (sub > 0) {
+            return 0;
+        }
+
         avgSupplyRate = ratio.mulDivDown(WAD - IMetaMorpho(vault).fee(), newTotalAmount);
     }
 
