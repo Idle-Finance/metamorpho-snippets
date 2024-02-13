@@ -83,7 +83,6 @@ contract MetaMorphoSnippets {
         uint256 queueLength = IMetaMorpho(vault).withdrawQueueLength();
         uint256 supplyQueueLength = IMetaMorpho(vault).supplyQueueLength();
         uint256 newTotalAmount = IMetaMorpho(vault).totalAssets();
-        uint256 totRemoved;
 
         if (sub > 0 && (newTotalAmount + add) <= sub) {
             // impossible to remove more than the vault has
@@ -99,16 +98,15 @@ contract MetaMorphoSnippets {
             if (add > 0) {
                 toAdd = _calcMarketAdd(IMetaMorpho(vault), idMarket, supplyQueueLength, add);
             }
-            // TODO add Jean-Grimal impl which should be ok here https://github.com/Idle-Labs/idle-tranches/pull/87/files
-            // as we loop through all withdrawQueue
             uint256 toSub;
             if (sub > 0) {
-                toSub = _calcMarketSub(IMetaMorpho(vault), idMarket, queueLength, sub);
+                (toSub, sub) = _calcMarketSub(IMetaMorpho(vault), idMarket, sub);
             }
 
             expectedSupply = morpho.expectedSupplyAssets(marketParams, vault);
             if (toSub > 0 && (expectedSupply + toAdd) < toSub) {
                 // impossible to remove more than the vault assets
+                sub += toSub;
                 continue;
             }
             // Use scaled add and sub values to calculate current supply APR Market
@@ -116,13 +114,11 @@ contract MetaMorphoSnippets {
                 // Use scaled add and sub values to calculate assets supplied
                 expectedSupply + toAdd - toSub
             );
-            // update amount subtracted from vault
-            totRemoved += toSub;
         }
 
         // If there is still some liquidity to remove here it means there is not enough liquidity
         // in the vault to cover the requested withdraw amount
-        if (sub - totRemoved > 0) {
+        if (sub > 0) {
             return 0;
         }
 
@@ -183,48 +179,25 @@ contract MetaMorphoSnippets {
     /// @notice calculate how much of vault `_sub` amount will be removed from target market
     /// @param _mmVault metamorpho vault
     /// @param _targetMarketId target market id
-    /// @param _withdrawQueueLen withdraw queue length
     /// @param _sub liquidity to remove
     function _calcMarketSub(
         IMetaMorpho _mmVault, 
         Id _targetMarketId,
-        uint256 _withdrawQueueLen,
         uint256 _sub
-    ) internal view returns (uint256) {
-        Market memory _market;
-        Position memory _position;
-        Id _currMarketId;
-        // loop throuh withdrawQueue, and see how much will be redeemed in target market
-        for (uint256 i = 0; i < _withdrawQueueLen; i++) {
-            _currMarketId = _mmVault.withdrawQueue(i);
-            _market = morpho.market(_currMarketId);
-            _position = morpho.position(_currMarketId, address(_mmVault));
-            // get available liquidity for this market
-            if (_market.totalSupplyShares == 0) {
-                continue;
-            }
-            uint256 _vaultAssets = _position.supplyShares * _market.totalSupplyAssets / _market.totalSupplyShares;
-            uint256 _availableLiquidity = _market.totalSupplyAssets - _market.totalBorrowAssets;
-            uint256 _withdrawable = _vaultAssets > _availableLiquidity ? _availableLiquidity : _vaultAssets;
-
-            // If this is the target market, return the current _sub value, eventually
-            // reduced to the max withdrawable amount
-            if (Id.unwrap(_currMarketId) == Id.unwrap(_targetMarketId)) {
-                if (_sub > _withdrawable) {
-                    _sub = _withdrawable;
-                }
-                break;
-            }
-            // If this is not the target market, check if we can withdraw all the _sub amount
-            // in this market, otherwise continue the loop and subtract the available liquidity
-            if (_sub > _withdrawable) {
-                _sub -= _withdrawable;
-            } else {
-                _sub = 0;
-                break;
-            }
+    ) internal view returns (uint256 toSub, uint256 remaining) {
+        Market memory _market = morpho.market(_targetMarketId);
+        Position memory _position = morpho.position(_targetMarketId, address(_mmVault));
+        if (_market.totalSupplyShares == 0) {
+            return (0, _sub);
         }
+        uint256 _vaultAssets = _position.supplyShares * _market.totalSupplyAssets / _market.totalSupplyShares;
+        uint256 _availableLiquidity = _market.totalSupplyAssets - _market.totalBorrowAssets;
+        uint256 _withdrawable = _vaultAssets > _availableLiquidity ? _availableLiquidity : _vaultAssets;
 
-        return _sub;
+        if (_sub > _withdrawable) {
+            (toSub, remaining) = (_withdrawable, _sub - _withdrawable);
+        } else {
+            (toSub, remaining) = (_sub, 0);
+        }
     }
 }

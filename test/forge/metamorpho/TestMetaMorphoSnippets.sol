@@ -259,7 +259,6 @@ contract TestMetaMorphoSnippets is IntegrationTest {
     }
 
     /// @notice calculate how much of vault `_sub` amount will be removed from target market
-    /// @dev copied from MetaMorphoSnippets.sol
     /// @param _mmVault metamorpho vault
     /// @param _targetMarketId target market id
     /// @param _withdrawQueueLen withdraw queue length
