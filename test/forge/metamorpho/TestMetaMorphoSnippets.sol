@@ -145,6 +145,11 @@ contract TestMetaMorphoSnippets is IntegrationTest {
         avgSupplyRateSnippets = snippets.supplyAPRVault(address(vault), add, sub);
         expectedAvgRate = _calcVaultAPR(id0, id1, firstDeposit, secondDeposit, add, sub);
 
+        // Check that the amount we want to redeem is actually available
+        uint256 maxWithdrawable = vault.maxWithdraw(ONBEHALF);
+        if (sub > maxWithdrawable) {
+            expectedAvgRate = 0;
+        }
         assertApproxEqAbs(avgSupplyRateSnippets, expectedAvgRate, 100, "Diff in supplyAPRVault with add/sub values");
     }
 

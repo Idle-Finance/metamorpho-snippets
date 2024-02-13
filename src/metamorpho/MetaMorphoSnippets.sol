@@ -82,13 +82,16 @@ contract MetaMorphoSnippets {
         uint256 expectedSupply;
         uint256 queueLength = IMetaMorpho(vault).withdrawQueueLength();
         uint256 supplyQueueLength = IMetaMorpho(vault).supplyQueueLength();
-        // simulate change in vault total assets
         uint256 newTotalAmount = IMetaMorpho(vault).totalAssets();
+        uint256 totRemoved;
+
         if (sub > 0 && (newTotalAmount + add) <= sub) {
+            // impossible to remove more than the vault has
             return 0;
         }
-
+        // simulate change in vault total assets
         newTotalAmount = newTotalAmount + add - sub;
+
         for (uint256 i; i < queueLength; ++i) {
             Id idMarket = IMetaMorpho(vault).withdrawQueue(i);
             MarketParams memory marketParams = morpho.idToMarketParams(idMarket);
@@ -105,6 +108,7 @@ contract MetaMorphoSnippets {
 
             expectedSupply = morpho.expectedSupplyAssets(marketParams, vault);
             if (toSub > 0 && (expectedSupply + toAdd) < toSub) {
+                // impossible to remove more than the vault assets
                 continue;
             }
             // Use scaled add and sub values to calculate current supply APR Market
@@ -112,11 +116,13 @@ contract MetaMorphoSnippets {
                 // Use scaled add and sub values to calculate assets supplied
                 expectedSupply + toAdd - toSub
             );
+            // update amount subtracted from vault
+            totRemoved += toSub;
         }
 
         // If there is still some liquidity to remove here it means there is not enough liquidity
         // in the vault to cover the requested withdraw amount
-        if (sub > 0) {
+        if (sub - totRemoved > 0) {
             return 0;
         }
 
